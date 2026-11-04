@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+    html, body { margin: 0; width: 100%; height: 100%; background: #000; overflow: hidden; }
+    #root, #root > * { width: 100%; height: 100%; border: 0; display: block; }
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script>
+    const root = document.getElementById('root');
+    let kind = null, yt = null, video = null, pending = null, vol = 50;
+
+    function parseYT(raw) {
+        let u;
+        try { u = new URL(raw); } catch (e) { return null; }
+        const h = u.hostname.replace(/^www\./, '').replace(/^m\./, '');
+        let id = null;
+        const list = u.searchParams.get('list');
+
+        if (h === 'youtu.be') {
+            id = u.pathname.slice(1).split('/')[0];
+        } else if (h === 'youtube.com' || h === 'music.youtube.com' || h === 'youtube-nocookie.com') {
+            if (u.pathname === '/watch') id = u.searchParams.get('v');
+            else {
+                const m = u.pathname.match(/^\/(shorts|embed|live|v)\/([\w-]{6,})/);
+                if (m) id = m[2];
+            }
+        } else {
+            return null;
+        }
+        if (!id && !list) return null;
+        return { id, list };
+    }
+
+    function stopAll() {
+        try { if (yt && yt.destroy) yt.destroy(); } catch (e) {}
+        root.innerHTML = '';
+        yt = null; video = null; kind = null; pending = null;
+    }
+
+    function playYT(y, start) {
+        kind = 'yt';
+        const div = document.createElement('div');
+        div.id = 'yt';
+        root.appendChild(div);
+
+        const make = () => {
+            const vars = {
+                autoplay: 1, controls: 0, disablekb: 1, fs: 0,
+                modestbranding: 1, rel: 0, iv_load_policy: 3,
+                playsinline: 1, start: start | 0,
+                origin: location.origin.startsWith('http') ? location.origin : undefined,
+            };
+            if (y.list) { vars.list = y.list; vars.listType = 'playlist'; }
+
+            yt = new YT.Player('yt', {
+                width: '100%',
+                height: '100%',
+                videoId: y.id || undefined,
+                playerVars: vars,
+                events: {
+                    onReady: (e) => { e.target.setVolume(vol); e.target.playVideo(); },
+                    onStateChange: (e) => {
+                        // Boucle sur une vidéo seule
+                        if (e.data === YT.PlayerState.ENDED && y.id && !y.list) {
+                            e.target.seekTo(0);
+                            e.target.playVideo();
+                        }
+                    },
+                },
+            });
+        };
+
+        if (window.YT && YT.Player) {
+            make();
+        } else {
+            pending = make;
+            if (!document.getElementById('yta')) {
+                const s = document.createElement('script');
+                s.id = 'yta';
+                s.src = 'https://www.youtube.com/iframe_api';
+                document.head.appendChild(s);
+            }
+        }
+    }
+
+    window.onYouTubeIframeAPIReady = () => {
+        if (pending) { const p = pending; pending = null; p(); }
+    };
+
+    function play(url, start) {
+        stopAll();
+
+        const y = parseYT(url);
+        if (y) { playYT(y, start); return; }
+
+        if (/\.(mp4|webm|ogg|ogv|mov)(\?.*)?$/i.test(url)) {
+            const v = document.createElement('video');
+            v.src = url;
+            v.autoplay = true;
+            v.loop = true;
+            v.playsInline = true;
+            v.volume = vol / 100;
+            v.addEventListener('loadedmetadata', () => {
+                if (start > 0 && isFinite(v.duration)) v.currentTime = start % v.duration;
+            });
+            root.appendChild(v);
+            video = v;
+            kind = 'video';
+            v.play().catch(() => {});
+            return;
+        }
+
+        // Autre lien : page web dans une iframe (certains sites bloquent l'intégration)
+        const f = document.createElement('iframe');
+        f.src = url;
+        f.allow = 'autoplay; fullscreen';
+        root.appendChild(f);
+        kind = 'iframe';
+    }
+
+    function setVol(v) {
+        vol = v;
+        if (kind === 'yt' && yt && yt.setVolume) yt.setVolume(v);
+        if (video) video.volume = v / 100;
+    }
+
+    window.addEventListener('message', (e) => {
+        const d = e.data || {};
+        if (d.action === 'play') play(d.url, d.start || 0);
+        else if (d.action === 'stop') stopAll();
+        else if (d.action === 'volume') setVol(d.value);
+    });
+</script>
+</body>
+</html>
